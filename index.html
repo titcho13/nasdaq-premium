@@ -1,0 +1,43 @@
+# ───────────── À AJOUTER dans les PARAMÈTRES du script Colab ─────────────
+GITHUB_REPO   = "votre-user/nasdaq-premium"   # ← votre dépôt GitHub (owner/repo)
+GITHUB_BRANCHE = "main"
+
+# ───────────── À AJOUTER après la définition de envoyer_telegram() ─────────────
+import base64
+
+def _github_token():
+    return _secret("GITHUB_TOKEN")          # secret Colab "GITHUB_TOKEN" (token fine-grained, droit Contents: Read and write)
+
+def pousser_github(setups, jour, now):
+    """Publie les setups PREMIUM du jour en setups.json à la racine du dépôt (GitHub Pages)."""
+    token = _github_token()
+    if not token or not GITHUB_REPO:
+        return False
+    premium = [s for s in setups if s["qualite"] == "PREMIUM"]
+    data = {
+        "jour": str(jour),
+        "maj": f"{now:%H:%M}",
+        "setups": [
+            {
+                "t0": f"{s['t0']:%H:%M}", "sens": s["sens"], "signal": s["signal"],
+                "prob": None if s["prob"] is None or (isinstance(s["prob"], float) and np.isnan(s["prob"])) else float(s["prob"]),
+                "t_conf": f"{s['t_conf']:%H:%M}", "delai": s["delai"], "etat": s["qualite"], "expire": f"{s['expire']:%H:%M}",
+            } for s in premium
+        ],
+    }
+    contenu = base64.b64encode(json.dumps(data, ensure_ascii=False).encode()).decode()
+    api = f"https://api.github.com/repos/{GITHUB_REPO}/contents/setups.json"
+    head = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    sha = None
+    r = requests.get(api, params={"ref": GITHUB_BRANCHE}, headers=head, timeout=10)
+    if r.ok: sha = r.json().get("sha")          # fichier existant → il faut son sha pour le mettre à jour
+    body = {"message": f"setups PREMIUM {jour} {now:%H:%M}", "content": contenu, "branch": GITHUB_BRANCHE}
+    if sha: body["sha"] = sha
+    r = requests.put(api, headers=head, json=body, timeout=15)
+    return r.ok
+
+# ───────────── À AJOUTER dans cycle(), juste après "nouveaux = traiter_alertes(...)" ─────────────
+# (supprimer le bloc si un push a déjà eu lieu ce cycle : GitHub limite à ~1 écriture / cycle)
+    try:
+        if pousser_github(setups, jour, now): LOG.append(f"{now:%H:%M:%S} 📱 setups.json publié sur GitHub")
+    except Exception as e: LOG.append(f"GitHub : {e}")
